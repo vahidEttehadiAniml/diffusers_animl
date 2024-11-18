@@ -144,6 +144,7 @@ else:
     _import_structure["cogvideo"] = [
         "CogVideoXPipeline",
         "CogVideoXImageToVideoPipeline",
+        "CogVideoXFramesToVideoPipeline",
         "CogVideoXVideoToVideoPipeline",
         "CogVideoXFunControlPipeline",
     ]
@@ -477,6 +478,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
         from .cogvideo import (
             CogVideoXFunControlPipeline,
             CogVideoXImageToVideoPipeline,
+            CogVideoXFramesToVideoPipeline,
             CogVideoXPipeline,
             CogVideoXVideoToVideoPipeline,
         )
