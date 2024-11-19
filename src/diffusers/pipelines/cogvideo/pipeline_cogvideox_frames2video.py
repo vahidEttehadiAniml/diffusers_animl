@@ -341,7 +341,8 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
 
     def prepare_latents(
         self,
-        images: torch.Tensor,
+        image: torch.Tensor,
+        frames: torch.Tensor,
         batch_size: int = 1,
         num_channels_latents: int = 16,
         num_frames: int = 13,
@@ -351,6 +352,8 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
         device: Optional[torch.device] = None,
         generator: Optional[torch.Generator] = None,
         latents: Optional[torch.Tensor] = None,
+        use_noise_condition: bool = False,
+        timestep: Optional[torch.Tensor] = None,
     ):
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
@@ -358,9 +361,10 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
 
-        images = images.permute(1, 0, 2, 3).unsqueeze(0)  # [B, C, F, H, W]
+        image = image.permute(1, 0, 2, 3).unsqueeze(0)  # [B, C, F, H, W]
+        frames = frames.permute(1, 0, 2, 3).unsqueeze(0)  # [B, C, F, H, W]
 
-        num_frames = (images.size(2) - 1) // self.vae_scale_factor_temporal + 1 if latents is None else latents.size(1)
+        num_frames = (frames.size(2) - 1) // self.vae_scale_factor_temporal + 1 if latents is None else latents.size(1)
 
         shape = (
             batch_size,
@@ -373,23 +377,39 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
 
         if isinstance(generator, list):
             image_latents = [
-                retrieve_latents(self.vae.encode(images[i].unsqueeze(0)), generator[i]) for i in range(batch_size)
+                retrieve_latents(self.vae.encode(image[i].unsqueeze(0)), generator[i]) for i in range(batch_size)
             ]
         else:
-            image_latents = [retrieve_latents(self.vae.encode(img.unsqueeze(0)), generator) for img in images]
+            image_latents = [retrieve_latents(self.vae.encode(img.unsqueeze(0)), generator) for img in image]
+
+        if isinstance(generator, list):
+            frames_latents = [
+                retrieve_latents(self.vae.encode(frames[i].unsqueeze(0)), generator[i]) for i in range(batch_size)
+            ]
+        else:
+            frames_latents = [retrieve_latents(self.vae.encode(img.unsqueeze(0)), generator) for img in frames]
+
 
         image_latents = torch.cat(image_latents, dim=0).to(dtype).permute(0, 2, 1, 3, 4)  # [B, F, C, H, W]
         image_latents = self.vae_scaling_factor_image * image_latents
 
-        # padding_shape = (
-        #     batch_size,
-        #     num_frames - 1,
-        #     num_channels_latents,
-        #     height // self.vae_scale_factor_spatial,
-        #     width // self.vae_scale_factor_spatial,
-        # )
-        # latent_padding = torch.zeros(padding_shape, device=device, dtype=dtype)
-        # image_latents = torch.cat([image_latents, latent_padding], dim=1)
+        frames_latents = torch.cat(frames_latents, dim=0).to(dtype).permute(0, 2, 1, 3, 4)  # [B, F, C, H, W]
+        frames_latents = self.vae_scaling_factor_image * frames_latents
+        if use_noise_condition:
+            noise_condition = frames_latents.clone()
+
+        if use_noise_condition:
+            padding_shape = (
+                batch_size,
+                num_frames - 1,
+                num_channels_latents,
+                height // self.vae_scale_factor_spatial,
+                width // self.vae_scale_factor_spatial,
+            )
+            latent_padding = torch.zeros(padding_shape, device=device, dtype=dtype)
+            frames_latents = torch.cat([image_latents, latent_padding], dim=1)
+        else:
+            frames_latents[:, :1] = image_latents
 
         if latents is None:
             latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
@@ -398,7 +418,11 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
 
         # scale the initial noise by the standard deviation required by the scheduler
         latents = latents * self.scheduler.init_noise_sigma
-        return latents, image_latents
+
+        if use_noise_condition:
+            latents = self.scheduler.add_noise(noise_condition, latents, timestep)
+
+        return latents, frames_latents
 
     # Copied from diffusers.pipelines.cogvideo.pipeline_cogvideox.CogVideoXPipeline.decode_latents
     def decode_latents(self, latents: torch.Tensor) -> torch.Tensor:
@@ -438,7 +462,8 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
 
     def check_inputs(
         self,
-        images,
+        image,
+        frames,
         prompt,
         height,
         width,
@@ -449,13 +474,22 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
         negative_prompt_embeds=None,
     ):
         if (
-            not isinstance(images, torch.Tensor)
-            and not isinstance(images, PIL.Image.Image)
-            and not isinstance(images, list)
+            not isinstance(image, torch.Tensor)
+            and not isinstance(image, PIL.Image.Image)
+            and not isinstance(image, list)
         ):
             raise ValueError(
                 "`image` has to be of type `torch.Tensor` or `PIL.Image.Image` or `List[PIL.Image.Image]` but is"
-                f" {type(images)}"
+                f" {type(image)}"
+            )
+
+        if (
+            not isinstance(frames, torch.Tensor)
+            and not isinstance(frames, list)
+        ):
+            raise ValueError(
+                "`image` has to be of type `torch.Tensor` or `PIL.Image.Image` or `List[PIL.Image.Image]` but is"
+                f" {type(frames)}"
             )
 
         if height % 8 != 0 or width % 8 != 0:
@@ -561,7 +595,8 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
-        images: PipelineImageInput,
+        image: PipelineImageInput,
+        frames: PipelineImageInput,
         prompt: Optional[Union[str, List[str]]] = None,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         height: int = 480,
@@ -571,6 +606,7 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
         timesteps: Optional[List[int]] = None,
         guidance_scale: float = 6,
         use_dynamic_cfg: bool = False,
+        use_noise_condition: bool = False,
         num_videos_per_prompt: int = 1,
         eta: float = 0.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
@@ -592,6 +628,8 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
         Args:
             image (`PipelineImageInput`):
                 The input image to condition the generation on. Must be an image, a list of images or a `torch.Tensor`.
+            frames (`PipelineImageInput`):
+                The input frmaes to condition the generation on. Must be an image, a list of images or a `torch.Tensor`.
             prompt (`str` or `List[str]`, *optional*):
                 The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.
                 instead.
@@ -680,7 +718,8 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
 
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(
-            images=images,
+            image=image,
+            frames=frames,
             prompt=prompt,
             height=height,
             width=width,
@@ -728,13 +767,16 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
         self._num_timesteps = len(timesteps)
 
         # 5. Prepare latents
-        images = self.video_processor.preprocess(images, height=height, width=width).to(
+        image = self.video_processor.preprocess(image, height=height, width=width).to(
+            device, dtype=prompt_embeds.dtype
+        )
+        frames = self.video_processor.preprocess(frames, height=height, width=width).to(
             device, dtype=prompt_embeds.dtype
         )
 
         latent_channels = self.transformer.config.in_channels // 2
         latents, image_latents = self.prepare_latents(
-            images,
+            image, frames,
             batch_size * num_videos_per_prompt,
             latent_channels,
             num_frames,
@@ -744,6 +786,8 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
             device,
             generator,
             latents,
+            use_noise_condition,
+            timesteps,
         )
 
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
