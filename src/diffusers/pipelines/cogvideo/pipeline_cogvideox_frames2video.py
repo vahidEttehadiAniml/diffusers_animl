@@ -353,7 +353,6 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
         generator: Optional[torch.Generator] = None,
         latents: Optional[torch.Tensor] = None,
         use_noise_condition: bool = False,
-        timestep: Optional[torch.Tensor] = None,
     ):
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
@@ -419,7 +418,7 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
         latents = latents * self.scheduler.init_noise_sigma
 
         if use_noise_condition:
-            latents = self.scheduler.add_noise(latent_condition, latents, timestep)
+            latents = self.scheduler.add_noise(latent_condition, latents, self._num_timesteps)
 
         return latents, frames_latents
 
@@ -763,7 +762,6 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
 
         # 4. Prepare timesteps
         timesteps, num_inference_steps = retrieve_timesteps(self.scheduler, num_inference_steps, device, timesteps)
-        latent_timestep = timesteps[:1].repeat(batch_size * num_videos_per_prompt)
         self._num_timesteps = len(timesteps)
 
         # 5. Prepare latents
@@ -787,7 +785,6 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
             generator,
             latents,
             use_noise_condition,
-            latent_timestep,
         )
 
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
