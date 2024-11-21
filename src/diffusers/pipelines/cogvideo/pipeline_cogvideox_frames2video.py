@@ -395,10 +395,9 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
 
         frames_latents = torch.cat(frames_latents, dim=0).to(dtype).permute(0, 2, 1, 3, 4)  # [B, F, C, H, W]
         frames_latents = self.vae_scaling_factor_image * frames_latents
-        if use_noise_condition:
-            noise_condition = frames_latents.clone()
 
         if use_noise_condition:
+            latent_condition = frames_latents.clone()
             padding_shape = (
                 batch_size,
                 num_frames - 1,
@@ -420,8 +419,7 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
         latents = latents * self.scheduler.init_noise_sigma
 
         if use_noise_condition:
-            # latents = self.scheduler.add_noise(noise_condition, latents, timestep)
-            latents += (noise_condition * 0.5)
+            latents = self.scheduler.add_noise(latent_condition, latents, timestep)
 
         return latents, frames_latents
 
