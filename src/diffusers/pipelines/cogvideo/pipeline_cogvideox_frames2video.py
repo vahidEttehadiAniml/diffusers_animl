@@ -418,7 +418,7 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
         latents = latents * self.scheduler.init_noise_sigma
 
         if use_noise_condition:
-            latents = self.scheduler.add_noise(latent_condition, latents, self._num_timesteps)
+            latents = self.scheduler.add_noise(latent_condition, latents, torch.Tensor([self._num_timesteps]).long())
 
         return latents, frames_latents
 
