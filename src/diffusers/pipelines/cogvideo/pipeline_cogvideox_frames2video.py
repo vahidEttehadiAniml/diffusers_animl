@@ -363,6 +363,12 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
         image = image.permute(1, 0, 2, 3).unsqueeze(0)  # [B, C, F, H, W]
         frames = frames.permute(1, 0, 2, 3).unsqueeze(0)  # [B, C, F, H, W]
 
+        last_image = None
+        if image.shape[2] == 2:
+            last_image = image[:,:,1:2].clone()
+            image = image[:,:,:1]
+
+
         num_frames = (frames.size(2) - 1) // self.vae_scale_factor_temporal + 1 if latents is None else latents.size(1)
 
         shape = (
@@ -381,6 +387,15 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
         else:
             image_latents = [retrieve_latents(self.vae.encode(img.unsqueeze(0)), generator) for img in image]
 
+        last_image_latents = None
+        if last_image is not None:
+            if isinstance(generator, list):
+                last_image_latents = [
+                    retrieve_latents(self.vae.encode(last_image[i].unsqueeze(0)), generator[i]) for i in range(batch_size)
+                ]
+            else:
+                last_image_latents = [retrieve_latents(self.vae.encode(img.unsqueeze(0)), generator) for img in last_image]
+
         if isinstance(generator, list):
             frames_latents = [
                 retrieve_latents(self.vae.encode(frames[i].unsqueeze(0)), generator[i]) for i in range(batch_size)
@@ -394,11 +409,6 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
 
         frames_latents = torch.cat(frames_latents, dim=0).to(dtype).permute(0, 2, 1, 3, 4)  # [B, F, C, H, W]
         frames_latents = self.vae_scaling_factor_image * frames_latents
-
-        image_latents_last = None
-        if image_latents.shape[1] == 2:
-            image_latents_last = image_latents[:,1:].clone()
-            image_latents = image_latents[:, :1]
 
         if use_noise_condition:
             latent_condition = frames_latents.clone()
@@ -414,8 +424,10 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
         else:
             frames_latents[:, :1] = image_latents
 
-        if image_latents_last:
-            frames_latents[:, -1:] = image_latents_last
+        if last_image_latents is not None:
+            last_image_latents = torch.cat(last_image_latents, dim=0).to(dtype).permute(0, 2, 1, 3, 4)  # [B, F, C, H, W]
+            last_image_latents = self.vae_scaling_factor_image * last_image_latents
+            frames_latents[:, -1:] = last_image_latents
 
         if latents is None:
             latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
