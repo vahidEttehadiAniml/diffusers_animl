@@ -751,7 +751,12 @@ class CogVideoXPatchEmbed(nn.Module):
                 )
                 pos_embedding = pos_embedding.to(dtype=embeds.dtype)
             else:
-                pos_embedding = self.pos_embedding
+                pos_embedding = self.pos_embedding.to(dtype=embeds.dtype)
+
+            if pos_embedding.is_cpu:
+                pos_embedding = pos_embedding.to('cuda')
+            if embeds.is_cpu:
+                embeds = embeds.to('cuda')
 
             embeds = embeds + pos_embedding
 
