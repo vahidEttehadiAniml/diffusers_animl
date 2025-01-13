@@ -1,4 +1,4 @@
-__version__ = "0.32.0.dev0"
+__version__ = "0.33.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -31,7 +31,7 @@ _import_structure = {
     "loaders": ["FromOriginalModelMixin"],
     "models": [],
     "pipelines": [],
-    "quantizers.quantization_config": ["BitsAndBytesConfig"],
+    "quantizers.quantization_config": ["BitsAndBytesConfig", "GGUFQuantizationConfig", "TorchAoConfig"],
     "schedulers": [],
     "utils": [
         "OptionalDependencyNotAvailable",
@@ -278,6 +278,7 @@ else:
             "CogView3PlusPipeline",
             "CycleDiffusionPipeline",
             "FluxControlImg2ImgPipeline",
+            "FluxControlInpaintPipeline",
             "FluxControlNetImg2ImgPipeline",
             "FluxControlNetInpaintPipeline",
             "FluxControlNetPipeline",
@@ -570,7 +571,7 @@ else:
 
 if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
     from .configuration_utils import ConfigMixin
-    from .quantizers.quantization_config import BitsAndBytesConfig
+    from .quantizers.quantization_config import BitsAndBytesConfig, GGUFQuantizationConfig, TorchAoConfig
 
     try:
         if not is_onnx_available():
@@ -767,6 +768,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             CogView3PlusPipeline,
             CycleDiffusionPipeline,
             FluxControlImg2ImgPipeline,
+            FluxControlInpaintPipeline,
             FluxControlNetImg2ImgPipeline,
             FluxControlNetInpaintPipeline,
             FluxControlNetPipeline,

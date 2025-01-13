@@ -54,11 +54,30 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
     Args:
         num_train_timesteps (`int`, defaults to 1000):
             The number of diffusion steps to train the model.
-        timestep_spacing (`str`, defaults to `"linspace"`):
-            The way the timesteps should be scaled. Refer to Table 2 of the [Common Diffusion Noise Schedules and
-            Sample Steps are Flawed](https://huggingface.co/papers/2305.08891) for more information.
         shift (`float`, defaults to 1.0):
             The shift value for the timestep schedule.
+        use_dynamic_shifting (`bool`, defaults to False):
+            Whether to apply timestep shifting on-the-fly based on the image resolution.
+        base_shift (`float`, defaults to 0.5):
+            Value to stabilize image generation. Increasing `base_shift` reduces variation and image is more consistent
+            with desired output.
+        max_shift (`float`, defaults to 1.15):
+            Value change allowed to latent vectors. Increasing `max_shift` encourages more variation and image may be
+            more exaggerated or stylized.
+        base_image_seq_len (`int`, defaults to 256):
+            The base image sequence length.
+        max_image_seq_len (`int`, defaults to 4096):
+            The maximum image sequence length.
+        invert_sigmas (`bool`, defaults to False):
+            Whether to invert the sigmas.
+        shift_terminal (`float`, defaults to None):
+            The end value of the shifted timestep schedule.
+        use_karras_sigmas (`bool`, defaults to False):
+            Whether to use Karras sigmas for step sizes in the noise schedule during sampling.
+        use_exponential_sigmas (`bool`, defaults to False):
+            Whether to use exponential sigmas for step sizes in the noise schedule during sampling.
+        use_beta_sigmas (`bool`, defaults to False):
+            Whether to use beta sigmas for step sizes in the noise schedule during sampling.
     """
 
     _compatibles = []
@@ -99,9 +118,18 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
         self._step_index = None
         self._begin_index = None
 
+        self._shift = shift
+
         self.sigmas = sigmas.to("cpu")  # to avoid too much CPU/GPU communication
         self.sigma_min = self.sigmas[-1].item()
         self.sigma_max = self.sigmas[0].item()
+
+    @property
+    def shift(self):
+        """
+        The value used for shifting.
+        """
+        return self._shift
 
     @property
     def step_index(self):
@@ -127,6 +155,9 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
                 The begin index for the scheduler.
         """
         self._begin_index = begin_index
+
+    def set_shift(self, shift: float):
+        self._shift = shift
 
     def scale_noise(
         self,
@@ -236,7 +267,7 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
         if self.config.use_dynamic_shifting:
             sigmas = self.time_shift(mu, 1.0, sigmas)
         else:
-            sigmas = self.config.shift * sigmas / (1 + (self.config.shift - 1) * sigmas)
+            sigmas = self.shift * sigmas / (1 + (self.shift - 1) * sigmas)
 
         if self.config.shift_terminal:
             sigmas = self.stretch_shift_to_terminal(sigmas)

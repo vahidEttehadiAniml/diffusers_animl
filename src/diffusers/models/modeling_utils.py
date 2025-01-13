@@ -99,21 +99,39 @@ def get_parameter_device(parameter: torch.nn.Module) -> torch.device:
 
 
 def get_parameter_dtype(parameter: torch.nn.Module) -> torch.dtype:
-    try:
-        return next(parameter.parameters()).dtype
-    except StopIteration:
-        try:
-            return next(parameter.buffers()).dtype
-        except StopIteration:
-            # For torch.nn.DataParallel compatibility in PyTorch 1.5
+    """
+    Returns the first found floating dtype in parameters if there is one, otherwise returns the last dtype it found.
+    """
+    last_dtype = None
+    for param in parameter.parameters():
+        last_dtype = param.dtype
+        if param.is_floating_point():
+            return param.dtype
 
-            def find_tensor_attributes(module: torch.nn.Module) -> List[Tuple[str, Tensor]]:
-                tuples = [(k, v) for k, v in module.__dict__.items() if torch.is_tensor(v)]
-                return tuples
+    for buffer in parameter.buffers():
+        last_dtype = buffer.dtype
+        if buffer.is_floating_point():
+            return buffer.dtype
 
-            gen = parameter._named_members(get_members_fn=find_tensor_attributes)
-            first_tuple = next(gen)
-            return first_tuple[1].dtype
+    if last_dtype is not None:
+        # if no floating dtype was found return whatever the first dtype is
+        return last_dtype
+
+    # For nn.DataParallel compatibility in PyTorch > 1.5
+    def find_tensor_attributes(module: nn.Module) -> List[Tuple[str, Tensor]]:
+        tuples = [(k, v) for k, v in module.__dict__.items() if torch.is_tensor(v)]
+        return tuples
+
+    gen = parameter._named_members(get_members_fn=find_tensor_attributes)
+    last_tuple = None
+    for tuple in gen:
+        last_tuple = tuple
+        if tuple[1].is_floating_point():
+            return tuple[1].dtype
+
+    if last_tuple is not None:
+        # fallback to the last dtype
+        return last_tuple[1].dtype
 
 
 class ModelMixin(torch.nn.Module, PushToHubMixin):
@@ -541,6 +559,9 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
                 If set to `None`, the `safetensors` weights are downloaded if they're available **and** if the
                 `safetensors` library is installed. If set to `True`, the model is forcibly loaded from `safetensors`
                 weights. If set to `False`, `safetensors` weights are not loaded.
+            disable_mmap ('bool', *optional*, defaults to 'False'):
+                Whether to disable mmap when loading a Safetensors model. This option can perform better when the model
+                is on a network mount or hard drive, which may not handle the seeky-ness of mmap very well.
 
         <Tip>
 
@@ -586,6 +607,7 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
         variant = kwargs.pop("variant", None)
         use_safetensors = kwargs.pop("use_safetensors", None)
         quantization_config = kwargs.pop("quantization_config", None)
+        disable_mmap = kwargs.pop("disable_mmap", False)
 
         allow_pickle = False
         if use_safetensors is None:
@@ -702,8 +724,9 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
         if hf_quantizer is not None:
             if device_map is not None:
                 raise NotImplementedError(
-                    "Currently, `device_map` is automatically inferred for quantized models. Support for providing `device_map` as an input will be added in the future."
+                    "Currently, providing `device_map` is not supported for quantized models. Providing `device_map` as an input will be added in the future."
                 )
+
             hf_quantizer.validate_environment(torch_dtype=torch_dtype, from_flax=from_flax, device_map=device_map)
             torch_dtype = hf_quantizer.update_torch_dtype(torch_dtype)
 
@@ -800,6 +823,7 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
                     revision=revision,
                     subfolder=subfolder or "",
                 )
+                # TODO: https://github.com/huggingface/diffusers/issues/10013
                 if hf_quantizer is not None:
                     model_file = _merge_sharded_checkpoints(sharded_ckpt_cached_folder, sharded_metadata)
                     logger.info("Merged sharded checkpoints as `hf_quantizer` is not None.")
@@ -858,15 +882,12 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
                 if device_map is None and not is_sharded:
                     # `torch.cuda.current_device()` is fine here when `hf_quantizer` is not None.
                     # It would error out during the `validate_environment()` call above in the absence of cuda.
-                    is_quant_method_bnb = (
-                        getattr(model, "quantization_method", None) == QuantizationMethod.BITS_AND_BYTES
-                    )
                     if hf_quantizer is None:
                         param_device = "cpu"
                     # TODO (sayakpaul,  SunMarc): remove this after model loading refactor
-                    elif is_quant_method_bnb:
+                    else:
                         param_device = torch.device(torch.cuda.current_device())
-                    state_dict = load_state_dict(model_file, variant=variant)
+                    state_dict = load_state_dict(model_file, variant=variant, disable_mmap=disable_mmap)
                     model._convert_deprecated_attention_blocks(state_dict)
 
                     # move the params from meta device to cpu
@@ -903,14 +924,12 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
                 else:  # else let accelerate handle loading and dispatching.
                     # Load weights and dispatch according to the device_map
                     # by default the device_map is None and the weights are loaded on the CPU
-                    force_hook = True
                     device_map = _determine_device_map(
                         model, device_map, max_memory, torch_dtype, keep_in_fp32_modules, hf_quantizer
                     )
                     if device_map is None and is_sharded:
                         # we load the parameters on the cpu
                         device_map = {"": "cpu"}
-                        force_hook = False
                     try:
                         accelerate.load_checkpoint_and_dispatch(
                             model,
@@ -920,7 +939,6 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
                             offload_folder=offload_folder,
                             offload_state_dict=offload_state_dict,
                             dtype=torch_dtype,
-                            force_hooks=force_hook,
                             strict=True,
                         )
                     except AttributeError as e:
@@ -950,7 +968,6 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
                                 offload_folder=offload_folder,
                                 offload_state_dict=offload_state_dict,
                                 dtype=torch_dtype,
-                                force_hooks=force_hook,
                                 strict=True,
                             )
                             model._undo_temp_convert_self_to_deprecated_attention_blocks()
@@ -966,7 +983,7 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
             else:
                 model = cls.from_config(config, **unused_kwargs)
 
-                state_dict = load_state_dict(model_file, variant=variant)
+                state_dict = load_state_dict(model_file, variant=variant, disable_mmap=disable_mmap)
                 model._convert_deprecated_attention_blocks(state_dict)
 
                 model, missing_keys, unexpected_keys, mismatched_keys, error_msgs = cls._load_pretrained_model(
@@ -1039,14 +1056,14 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
                     dtype_present_in_args = True
                     break
 
-        # Checks if the model has been loaded in 4-bit or 8-bit with BNB
-        if getattr(self, "quantization_method", None) == QuantizationMethod.BITS_AND_BYTES:
+        if getattr(self, "is_quantized", False):
             if dtype_present_in_args:
                 raise ValueError(
-                    "You cannot cast a bitsandbytes model in a new `dtype`. Make sure to load the model using `from_pretrained` using the"
-                    " desired `dtype` by passing the correct `torch_dtype` argument."
+                    "Casting a quantized model to a new `dtype` is unsupported. To set the dtype of unquantized layers, please "
+                    "use the `torch_dtype` argument when loading the model using `from_pretrained` or `from_single_file`"
                 )
 
+        if getattr(self, "quantization_method", None) == QuantizationMethod.BITS_AND_BYTES:
             if getattr(self, "is_loaded_in_8bit", False):
                 raise ValueError(
                     "`.to` is not supported for `8-bit` bitsandbytes models. Please use the model as it is, since the"
@@ -1197,7 +1214,7 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
     # Adapted from `transformers` modeling_utils.py
     def _get_no_split_modules(self, device_map: str):
         """
-        Get the modules of the model that should not be spit when using device_map. We iterate through the modules to
+        Get the modules of the model that should not be split when using device_map. We iterate through the modules to
         get the underlying `_no_split_modules`.
 
         Args:
