@@ -732,11 +732,11 @@ class CogVideoXPatchEmbed(nn.Module):
         ).contiguous()  # [batch, seq_length + num_frames x height x width, channels]
 
         if self.use_positional_embeddings or self.use_learned_positional_embeddings:
-            if self.use_learned_positional_embeddings and (self.sample_width != width or self.sample_height != height):
-                raise ValueError(
-                    "It is currently not possible to generate videos at a different resolution that the defaults. This should only be the case with 'THUDM/CogVideoX-5b-I2V'."
-                    "If you think this is incorrect, please open an issue at https://github.com/huggingface/diffusers/issues."
-                )
+            # if self.use_learned_positional_embeddings and (self.sample_width != width or self.sample_height != height):
+            #     raise ValueError(
+            #         "It is currently not possible to generate videos at a different resolution that the defaults. This should only be the case with 'THUDM/CogVideoX-5b-I2V'."
+            #         "If you think this is incorrect, please open an issue at https://github.com/huggingface/diffusers/issues."
+            #     )
 
             pre_time_compression_frames = (num_frames - 1) * self.temporal_compression_ratio + 1
 

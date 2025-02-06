@@ -446,6 +446,18 @@ class CogVideoXFramesToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin
             last_image_latents = torch.cat(last_image_latents, dim=0).to(dtype).permute(0, 2, 1, 3, 4)  # [B, F, C, H, W]
             last_image_latents = self.vae_scaling_factor_image * last_image_latents
             frames_latents[:, -1:] = last_image_latents
+            # frames_latents[:, 1:-1] *= 0.0
+
+        # drop_latent = torch.zeros_like(frames_latents)
+        # # mid_ind = frames_latents.shape[1] // 2
+        # # drop_latent[:, mid_ind] = frames_latents[:, mid_ind] * 1.0
+        # frames_latents[:, 1:-1] = drop_latent[:, 1:-1]
+
+        # drop_latent = torch.zeros_like(frames_latents)
+        # ind1 = frames_latents.shape[1] // 3
+        # drop_latent[:, [ind1, 2*ind1]] = frames_latents[:, [ind1, 2*ind1]] * 1.0
+        # frames_latents[:, 1:-1] = drop_latent[:, 1:-1]
+
 
         if latents is None:
             latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
