@@ -14,7 +14,6 @@
 # limitations under the License.
 
 import gc
-import tempfile
 import unittest
 
 import numpy as np
@@ -30,7 +29,7 @@ from diffusers import (
 from diffusers.utils.testing_utils import (
     enable_full_determinism,
     numpy_cosine_similarity_distance,
-    require_torch_gpu,
+    require_torch_accelerator,
     slow,
     torch_device,
 )
@@ -55,6 +54,7 @@ class HunyuanDiTPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
     image_latents_params = TEXT_TO_IMAGE_IMAGE_PARAMS
 
     required_optional_params = PipelineTesterMixin.required_optional_params
+    test_layerwise_casting = True
 
     def get_dummy_components(self):
         torch.manual_seed(0)
@@ -127,10 +127,12 @@ class HunyuanDiTPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
         max_diff = np.abs(image_slice.flatten() - expected_slice).max()
         self.assertLessEqual(max_diff, 1e-3)
 
+    @unittest.skip("Not supported.")
     def test_sequential_cpu_offload_forward_pass(self):
         # TODO(YiYi) need to fix later
         pass
 
+    @unittest.skip("Not supported.")
     def test_sequential_offload_forward_pass_twice(self):
         # TODO(YiYi) need to fix later
         pass
@@ -139,99 +141,6 @@ class HunyuanDiTPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
         self._test_inference_batch_single_identical(
             expected_max_diff=1e-3,
         )
-
-    def test_save_load_optional_components(self):
-        components = self.get_dummy_components()
-        pipe = self.pipeline_class(**components)
-        pipe.to(torch_device)
-        pipe.set_progress_bar_config(disable=None)
-
-        inputs = self.get_dummy_inputs(torch_device)
-
-        prompt = inputs["prompt"]
-        generator = inputs["generator"]
-        num_inference_steps = inputs["num_inference_steps"]
-        output_type = inputs["output_type"]
-
-        (
-            prompt_embeds,
-            negative_prompt_embeds,
-            prompt_attention_mask,
-            negative_prompt_attention_mask,
-        ) = pipe.encode_prompt(prompt, device=torch_device, dtype=torch.float32, text_encoder_index=0)
-
-        (
-            prompt_embeds_2,
-            negative_prompt_embeds_2,
-            prompt_attention_mask_2,
-            negative_prompt_attention_mask_2,
-        ) = pipe.encode_prompt(
-            prompt,
-            device=torch_device,
-            dtype=torch.float32,
-            text_encoder_index=1,
-        )
-
-        # inputs with prompt converted to embeddings
-        inputs = {
-            "prompt_embeds": prompt_embeds,
-            "prompt_attention_mask": prompt_attention_mask,
-            "negative_prompt_embeds": negative_prompt_embeds,
-            "negative_prompt_attention_mask": negative_prompt_attention_mask,
-            "prompt_embeds_2": prompt_embeds_2,
-            "prompt_attention_mask_2": prompt_attention_mask_2,
-            "negative_prompt_embeds_2": negative_prompt_embeds_2,
-            "negative_prompt_attention_mask_2": negative_prompt_attention_mask_2,
-            "generator": generator,
-            "num_inference_steps": num_inference_steps,
-            "output_type": output_type,
-            "use_resolution_binning": False,
-        }
-
-        # set all optional components to None
-        for optional_component in pipe._optional_components:
-            setattr(pipe, optional_component, None)
-
-        output = pipe(**inputs)[0]
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pipe.save_pretrained(tmpdir)
-            pipe_loaded = self.pipeline_class.from_pretrained(tmpdir)
-            pipe_loaded.to(torch_device)
-            pipe_loaded.set_progress_bar_config(disable=None)
-
-        for optional_component in pipe._optional_components:
-            self.assertTrue(
-                getattr(pipe_loaded, optional_component) is None,
-                f"`{optional_component}` did not stay set to None after loading.",
-            )
-
-        inputs = self.get_dummy_inputs(torch_device)
-
-        generator = inputs["generator"]
-        num_inference_steps = inputs["num_inference_steps"]
-        output_type = inputs["output_type"]
-
-        # inputs with prompt converted to embeddings
-        inputs = {
-            "prompt_embeds": prompt_embeds,
-            "prompt_attention_mask": prompt_attention_mask,
-            "negative_prompt_embeds": negative_prompt_embeds,
-            "negative_prompt_attention_mask": negative_prompt_attention_mask,
-            "prompt_embeds_2": prompt_embeds_2,
-            "prompt_attention_mask_2": prompt_attention_mask_2,
-            "negative_prompt_embeds_2": negative_prompt_embeds_2,
-            "negative_prompt_attention_mask_2": negative_prompt_attention_mask_2,
-            "generator": generator,
-            "num_inference_steps": num_inference_steps,
-            "output_type": output_type,
-            "use_resolution_binning": False,
-        }
-
-        output_loaded = pipe_loaded(**inputs)[0]
-
-        max_diff = np.abs(to_np(output) - to_np(output_loaded)).max()
-        self.assertLess(max_diff, 1e-4)
 
     def test_feed_forward_chunking(self):
         device = "cpu"
@@ -297,9 +206,15 @@ class HunyuanDiTPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
             original_image_slice, image_slice_disabled, atol=1e-2, rtol=1e-2
         ), "Original outputs should match when fused QKV projections are disabled."
 
+    @unittest.skip(
+        "Test not supported as `encode_prompt` is called two times separately which deivates from about 99% of the pipelines we have."
+    )
+    def test_encode_prompt_works_in_isolation(self):
+        pass
+
 
 @slow
-@require_torch_gpu
+@require_torch_accelerator
 class HunyuanDiTPipelineIntegrationTests(unittest.TestCase):
     prompt = "一个宇航员在骑马"
 
@@ -319,7 +234,7 @@ class HunyuanDiTPipelineIntegrationTests(unittest.TestCase):
         pipe = HunyuanDiTPipeline.from_pretrained(
             "XCLiu/HunyuanDiT-0523", revision="refs/pr/2", torch_dtype=torch.float16
         )
-        pipe.enable_model_cpu_offload()
+        pipe.enable_model_cpu_offload(device=torch_device)
         prompt = self.prompt
 
         image = pipe(
